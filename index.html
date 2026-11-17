@@ -221,6 +221,13 @@ dialog.detail::backdrop { background: rgba(10, 20, 30, .5); }
 .oth.off { opacity: .55; }
 h3.mini { font-size: .95rem; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
 /* weekstrip */
+.ws-bar { position: relative; }
+.ws-restmark { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--walk); pointer-events: none; }
+.ws-restmark .ico { width: 30px; height: 30px; stroke-width: 1.5; opacity: .9; }
+.ws-restmark.small { align-items: flex-start; padding-top: 10px; }
+.ws-restmark.small .ico { width: 22px; height: 22px; }
+.ws-day.restday .ws-bar { border-color: color-mix(in srgb, var(--walk) 45%, var(--line)); background: color-mix(in srgb, var(--walk) 7%, transparent); }
+.ws-day.restday .ws-rest { color: var(--walk); }
 .wk-subline { color: var(--muted); font-size: .9rem; margin: -6px 0 12px; }
 .ws-day.future .ws-bar { background: transparent; border: 1px dashed var(--line); }
 .weekstrip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-top: 18px; }
@@ -1434,8 +1441,8 @@ button.fact { cursor: pointer; } button.fact:hover { border-color: var(--terra);
       return `<div class="ys"><dt>${label}</dt><dd><div class="v">${v ? fmt(v) : '0'}${unit && v ? `<small>${unit}</small>` : ''}</div><div class="d ${cls}">${d}</div>${avg}</dd></div>`;
     }).join('');
     const per = SPORT_KEYS.map((k) => [k, cur.acts.filter((a) => sportOf(a.type).key === k)]).filter(([, xs]) => xs.length);
-    const kcal = cur.acts.reduce((t, a) => t + (a.calories || 0), 0);
-    $('wkSports').innerHTML = per.length ? per.map(([k, xs]) => `${SPORTS[k]} <b>${hm(xs.reduce((s, a) => s + a.moving_time, 0))}</b>${k !== 'other' && xs.some((a) => a.distance) ? ` (${nf(xs.reduce((s, a) => s + (a.distance || 0), 0) / 1000, 1)} km)` : ''}`).join(', ') + '.' + (kcal ? ` Samen <b>${nf(kcal)} kcal</b> verbruikt.` : '') : (w.mode === 'week' ? 'Nog geen activiteiten deze week.' : 'Geen activiteiten in de afgelopen 7 dagen.');
+    const kcal = cur.acts.reduce((t, a) => t + (a.calories || 0), 0), rs = restStats(all, w.from, w.to);
+    $('wkSports').innerHTML = per.length ? per.map(([k, xs]) => `${SPORTS[k]} <b>${hm(xs.reduce((s, a) => s + a.moving_time, 0))}</b>${k !== 'other' && xs.some((a) => a.distance) ? ` (${nf(xs.reduce((s, a) => s + (a.distance || 0), 0) / 1000, 1)} km)` : ''}`).join(', ') + '.' + (kcal ? ` Samen <b>${nf(kcal)} kcal</b> verbruikt.` : '') + ` <b>${nf(rs.rest)} ${rs.rest === 1 ? 'rustdag' : 'rustdagen'}</b>${rs.walkRest ? `, waarvan ${nf(rs.walkRest)} met alleen een wandeling` : ''}.` : (w.mode === 'week' ? 'Nog geen activiteiten deze week.' : 'Geen activiteiten in de afgelopen 7 dagen.');
   }
 
   /* ---------- FIETSEN / HARDLOPEN / WANDELEN ---------- */
@@ -1554,6 +1561,27 @@ button.fact { cursor: pointer; } button.fact:hover { border-color: var(--terra);
     return `<section class="panel recon"><div class="panel-head"><h2>${SPORTS[c.key]}: vergelijking met je Strava-export</h2><p class="sub">${esc(period)}, tot de datum van je export</p></div>${html}</section>`;
   }
 
+  /* ---------- rustdagen ---------- */
+  // Een rustdag is een dag zonder activiteiten, of met alleen wandelen: samen minder dan 10 km en minder dan 500 hoogtemeters.
+  const REST_KM = 10, REST_HM = 500;
+  function dayKind(acts) {
+    if (!acts.length) return 'rest';
+    if (acts.every((a) => sportOf(a.type).key === 'walk') && acts.reduce((t, a) => t + (a.distance || 0), 0) < REST_KM * 1000 && acts.reduce((t, a) => t + (a.total_elevation_gain || 0), 0) < REST_HM) return 'active-rest';
+    return 'training';
+  }
+  function restStats(all, from, to) {
+    const byDay = new Map(); for (const a of all) { const k = a.start_date_local.slice(0, 10); if (k >= from && k <= to) { if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(a); } }
+    let days = 0, rest = 0, walkRest = 0, run = 0, bestRun = 0, bestEnd = null;
+    for (let d = parseDay(from); iso(d) <= to; d.setDate(d.getDate() + 1)) {
+      const dayActs = byDay.get(iso(d)) || [];
+      if (!dayActs.length && iso(d) === iso(new Date())) continue; // vandaag is nog niet voorbij
+      const kind = dayKind(dayActs); days++;
+      if (kind === 'training') { run++; if (run > bestRun) { bestRun = run; bestEnd = iso(d); } }
+      else { rest++; if (kind === 'active-rest') walkRest++; run = 0; }
+    }
+    return { days, rest, walkRest, bestRun, bestEnd };
+  }
+
   /* ---------- weekstrip (Nu) ---------- */
   function renderWeekStrip(all, w) {
     const days = [];
@@ -1563,9 +1591,11 @@ button.fact { cursor: pointer; } button.fact:hover { border-color: var(--terra);
     $('weekStrip').innerHTML = days.map(({ d, k, acts }) => {
       const secs = acts.reduce((s, a) => s + a.moving_time, 0), load = acts.reduce((s, a) => s + (a.icu_training_load || 0), 0);
       const segs = acts.map((a) => { const sp = sportOf(a.type); return `<button class="ws-seg" data-id="${esc(a.id)}" style="height:${Math.max(4, a.moving_time / maxSecs * 100)}%;background:${css('--' + sp.key)}" title="${esc(`${a.name || sp.name}: ${hm(a.moving_time)}${a.distance ? `, ${nf(a.distance / 1000, 1)} km` : ''}`)}" aria-label="${esc(`${a.name || sp.name}, ${hm(a.moving_time)}`)}"></button>`; }).join('');
-      const future = k > iso(new Date());
-      return `<div class="ws-day${k === iso(new Date()) ? ' today' : ''}${future ? ' future' : ''}"><div class="ws-head"><b>${DAYS[(d.getDay() + 6) % 7]}</b>${d.getDate()}</div><div class="ws-bar">${segs}</div>
-        <div class="ws-foot">${secs ? `<b>${hm(secs)}</b>${hasLoad && load ? `<span>belasting ${nf(load)}</span>` : ''}` : future ? '<span class="ws-rest">&nbsp;</span>' : '<span class="ws-rest">rust</span>'}</div></div>`;
+      const future = k > iso(new Date()), kind = future ? 'future' : dayKind(acts);
+      const restMark = kind === 'rest' ? `<span class="ws-restmark" title="Rustdag">${icon('moon')}</span>` : kind === 'active-rest' ? `<span class="ws-restmark small" title="Rustdag met een wandeling">${icon('leaf')}</span>` : '';
+      const foot = kind === 'rest' ? `<span class="ws-rest">${k === iso(new Date()) ? 'nog rustig' : 'rustdag'}</span>` : kind === 'active-rest' ? `<b>${hm(secs)}</b><span class="ws-rest">actieve rust</span>` : secs ? `<b>${hm(secs)}</b>${hasLoad && load ? `<span>belasting ${nf(load)}</span>` : ''}` : '<span class="ws-rest">&nbsp;</span>';
+      return `<div class="ws-day${k === iso(new Date()) ? ' today' : ''}${future ? ' future' : ''}${kind === 'rest' || kind === 'active-rest' ? ' restday' : ''}"><div class="ws-head"><b>${DAYS[(d.getDay() + 6) % 7]}</b>${d.getDate()}</div><div class="ws-bar">${restMark}${segs}</div>
+        <div class="ws-foot">${foot}</div></div>`;
     }).join('');
   }
 
@@ -1692,7 +1722,8 @@ button.fact { cursor: pointer; } button.fact:hover { border-color: var(--terra);
     const withKcal = xs.filter((a) => a.calories > 0), kcal = withKcal.reduce((t, a) => t + a.calories, 0);
     const beats = xs.filter((a) => a.average_heartrate).reduce((t, a) => t + a.average_heartrate * a.moving_time / 60, 0);
     const com = xs.filter(isCommute), comKm = com.reduce((t, a) => t + (a.distance || 0), 0) / 1000;
-    const early = xs.filter((a) => +a.start_date_local.slice(11, 13) < 7), late = xs.filter((a) => +a.start_date_local.slice(11, 13) >= 21);
+    // Vroege vogel: tussen 4 en 7 uur. Alles na 21 uur en voor 4 uur 's nachts telt als laat.
+    const hour = (a) => +a.start_date_local.slice(11, 13), early = xs.filter((a) => hour(a) >= 4 && hour(a) < 7), late = xs.filter((a) => hour(a) >= 21 || hour(a) < 4);
     const earliest = early.reduce((b, a) => (!b || a.start_date_local.slice(11, 16) < b.start_date_local.slice(11, 16) ? a : b), null);
     const temps = xs.filter((a) => tempOf(a) != null && sportOf(a.type).key !== 'other');
     const hot = temps.reduce((b, a) => (!b || tempOf(a) > tempOf(b) ? a : b), null), cold = temps.reduce((b, a) => (!b || tempOf(a) < tempOf(b) ? a : b), null);
@@ -1707,13 +1738,19 @@ button.fact { cursor: pointer; } button.fact:hover { border-color: var(--terra);
     const card = (ic, k, v, n, a) => `<${a ? `button type="button" class="fact" data-id="${esc(a.id)}"` : 'div class="fact"'}>${icon(ic)}<span class="k">${k}</span><span class="v">${v}</span><span class="n">${n}</span></${a ? 'button' : 'div'}>`;
     const when = (a) => `${esc(a.name || sportOf(a.type).name)}, ${shortDate(parseDay(a.start_date_local))}${ctl.all ? ` ${yearOf(a)}` : ''}`;
     const out = [];
+    { const from = ctl.all ? DATA.activities.filter(isReal).reduce((m, a) => a.start_date_local < m ? a.start_date_local : m, iso(new Date())).slice(0, 10) : `${ctl.y}-01-01`;
+      const to = ctl.all || ctl.y === thisYear() ? iso(new Date()) : `${ctl.y}-12-31`, r = restStats(realActs('all'), from, to);
+      if (r.days) {
+        out.push(card('leaf', 'Rustdagen', `${nf(r.rest)} van ${nf(r.days)} dagen`, `gemiddeld ${nf(r.rest / r.days * 7, 1)} per week${r.walkRest ? `; ${nf(r.walkRest)} daarvan met alleen een korte wandeling (minder dan ${REST_KM} km en ${REST_HM} hoogtemeters)` : ''}`));
+        if (r.bestRun > 1) out.push(card('nu', 'Langst zonder rustdag', `${nf(r.bestRun)} dagen`, `achter elkaar getraind, tot ${shortDate(parseDay(r.bestEnd))}${ctl.all ? ` ${r.bestEnd.slice(0, 4)}` : ''}`));
+      } }
     if (f.kcal) out.push(card('fire', 'Verbruikt', `${nf(f.kcal)} kcal`, `ongeveer ${nf(f.kcal / 140)} stroopwafels${f.kcalShare < .85 ? `; van ${nf(f.kcalShare * 100)}% van je activiteiten bekend` : ''}`));
     if (f.beats) out.push(card('heart', 'Hartslagen tijdens het sporten', f.beats >= 1e6 ? `${nf(f.beats / 1e6, 1)} miljoen` : nf(f.beats), `gemiddelde hartslag maal de duur van elke activiteit`));
     if (f.elev) out.push(card('mountain', 'Geklommen', `${nf(f.elev / 8849, 1)}× de Everest`, `${nf(f.elev)} hoogtemeters, of ${nf(f.elev / 1610)} keer de Mont Ventoux vanaf Bédoin`));
     if (f.trip) out.push(card('globe', 'Afgelegd', f.trip.v, f.trip.n));
     if (f.comKm) out.push(card('leaf', 'Bespaarde CO₂', `${nf(f.comKm * 0.15)} kg`, `${nf(f.comKm)} km woon-werk op de fiets in plaats van met de auto (ongeveer 150 gram per km)`));
-    if (f.early.length) out.push(card('sunrise', 'Vroege vogel', `${nf(f.early.length)}×`, `voor 7 uur begonnen; het vroegst om ${f.earliest.start_date_local.slice(11, 16)} (${when(f.earliest)})`, f.earliest));
-    if (f.late.length) out.push(card('moon', 'Avondmens', `${nf(f.late.length)}×`, `na 21 uur begonnen`));
+    if (f.early.length) out.push(card('sunrise', 'Vroege vogel', `${nf(f.early.length)}×`, `tussen 4 en 7 uur begonnen; het vroegst om ${f.earliest.start_date_local.slice(11, 16)} (${when(f.earliest)})`, f.earliest));
+    if (f.late.length) { const latest = f.late.reduce((b, a) => { const t = (x) => { const h = +x.start_date_local.slice(11, 13); return (h < 4 ? h + 24 : h) * 60 + +x.start_date_local.slice(14, 16); }; return !b || t(a) > t(b) ? a : b; }, null); out.push(card('moon', 'Avondmens', `${nf(f.late.length)}×`, `na 21 uur of midden in de nacht begonnen; het laatst om ${latest.start_date_local.slice(11, 16)} (${when(latest)})`, latest)); }
     if (f.hot && f.cold && f.hot !== f.cold) {
       out.push(card('thermo', 'Warmste training', degrees(tempOf(f.hot)), when(f.hot), f.hot));
       out.push(card('snow', 'Koudste training', degrees(tempOf(f.cold)), when(f.cold), f.cold));
