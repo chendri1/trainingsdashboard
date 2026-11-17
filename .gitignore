@@ -1,0 +1,21 @@
+# Persoonlijke exports en gegevens
+activities.csv
+*.csv
+*.fit
+*.fit.gz
+*.gpx
+*.tcx
+*.json
+
+# Lokale geheimen en configuratie
+.env
+.env.*
+*.key
+*.secret
+secrets.*
+config.local.*
+
+# Log- en tijdelijke bestanden
+*.log
+.DS_Store
+Thumbs.db
